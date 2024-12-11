@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+<title>Text Analyzer</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+  }
+  #input-text {
+    width: 100%;
+    height: 100px;
+  }
+  .section {
+    margin-top: 30px;
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+<h1>Text Analyzer</h1>
+
+<!-- Original UI for analyzing new text -->
+<div>
+  <textarea id="input-text" placeholder="Enter text..."></textarea><br><br>
+  <button id="analyze-btn">Analyze</button>
+</div>
+
+<div class="section">
+  <h2>Single Analysis Results</h2>
+  <p id="words-with-repeats"></p>
+  <canvas id="letterChart" width="400" height="200"></canvas>
+  <canvas id="wordChart" width="400" height="200" style="margin-top:30px;"></canvas>
+  <!-- Added Pie Chart for words with repeats vs without repeats -->
+  <canvas id="repeatsPieChart" width="400" height="300" style="margin-top:30px;"></canvas>
+</div>
+
+<div class="section">
+  <h2>History (Last 15)</h2>
+  <div id="history-container"></div>
+</div>
+
+<!-- New section for cumulative results -->
+<div class="section">
+  <h2>Cumulative Results of Past Analyses</h2>
+  <p>Click the button below to fetch and combine all past data:</p>
+  <button id="load-combined-btn">Load and Combine Past Results</button>
+  <canvas id="combinedLetterChart" width="400" height="200" style="margin-top:20px;"></canvas>
+  <canvas id="combinedWordChart" width="400" height="200" style="margin-top:20px;"></canvas>
+</div>
+
+<script>
+// Original code for analyzing single texts and showing results
+let letterChart = null;
+let wordChart = null;
+let repeatsPieChart = null;
+
+document.getElementById('analyze-btn').addEventListener('click', analyzeText);
+
+function analyzeText() {
+  const text = document.getElementById('input-text').value;
+  fetch('/analyze', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({text: text})
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.error) {
+      alert(data.error);
+      return;
+    }
+    renderSingleResultCharts(data);
+    loadHistory();
+  });
+}
+
+function loadHistory() {
+  fetch('/history')
+    .then(res => res.json())
+    .then(historyItems => {
+      const container = document.getElementById('history-container');
+      container.innerHTML = '';
+      historyItems.forEach(item => {
+        const div = document.createElement('div');
+        div.style.cursor = 'pointer';
+        div.textContent = `ID: ${item.id}, Text: ${item.text.slice(0,50)}...`;
+        div.addEventListener('click', () => loadResult(item.id));
+        container.appendChild(div);
+      });
+    });
+}
+
+function loadResult(id) {
+  fetch('/get_result/' + id)
+    .then(res => res.json())
+    .then(data => {
+      renderSingleResultCharts(data);
+    });
+}
+
+function renderSingleResultCharts(data) {
+  document.getElementById('words-with-repeats').textContent =
+    `Words with repeated letters: ${data.words_with_repeats}`;
+
+  const letterLabels = Object.keys(data.letter_counts);
+  const letterValues = Object.values(data.letter_counts);
+
+  const wordLabels = Object.keys(data.word_counts);
+  const wordValues = Object.values(data.word_counts);
+
+  // Destroy existing charts if they exist
+  if (letterChart) letterChart.destroy();
+  if (wordChart) wordChart.destroy();
+  if (repeatsPieChart) repeatsPieChart.destroy();
+
+  // Create Letter Frequency Chart
+  const letterCtx = document.getElementById('letterChart').getContext('2d');
+  letterChart = new Chart(letterCtx, {
+    type: 'bar',
+    data: {
+      labels: letterLabels,
+      datasets: [{
+        label: 'Letter Frequency',
+        data: letterValues,
+        backgroundColor: 'rgba(54, 162, 235, 0.7)'
+      }]
+    },
+    options: { responsive: true, scales: { y: { beginAtZero: true } } }
+  });
+
+  // Create Word Frequency Chart
+  const wordCtx = document.getElementById('wordChart').getContext('2d');
+  wordChart = new Chart(wordCtx, {
+    type: 'bar',
+    data: {
+      labels: wordLabels,
+      datasets: [{
+        label: 'Word Frequency',
+        data: wordValues,
+        backgroundColor: 'rgba(75, 192, 192, 0.7)'
+      }]
+    },
+    options: { responsive: true, scales: { y: { beginAtZero: true } } }
+  });
+
+  // Create Pie Chart for Words with Repeats vs Without
+  const totalWords = wordValues.reduce((a, b) => a + b, 0);
+  const repeats = data.words_with_repeats;
+  const noRepeats = totalWords - repeats;
+
+  const pieCtx = document.getElementById('repeatsPieChart').getContext('2d');
+  repeatsPieChart = new Chart(pieCtx, {
+    type: 'pie',
+    data: {
+      labels: ['With Repeats', 'Without Repeats'],
+      datasets: [{
+        data: [repeats, noRepeats],
+        backgroundColor: [
+          'rgba(255, 99, 132, 0.7)',
+          'rgba(54, 162, 235, 0.7)'
+        ]
+      }]
+    },
+    options: {
+      responsive: false
+    }
+  });
+}
+
+// New code for cumulative results
+let combinedLetterChart = null;
+let combinedWordChart = null;
+
+document.getElementById('load-combined-btn').addEventListener('click', loadAndCombineHistoryResults);
+
+async function loadAndCombineHistoryResults() {
+  const historyItems = await fetch('/history').then(res => res.json());
+
+  const cumulativeLetterCounts = {};
+  const cumulativeWordCounts = {};
+
+  for (let item of historyItems) {
+    const data = await fetch('/get_result/' + item.id).then(r => r.json());
+    for (let letter in data.letter_counts) {
+      cumulativeLetterCounts[letter] = (cumulativeLetterCounts[letter] || 0) + data.letter_counts[letter];
+    }
+    for (let word in data.word_counts) {
+      cumulativeWordCounts[word] = (cumulativeWordCounts[word] || 0) + data.word_counts[word];
+    }
+  }
+
+  renderCumulativeCharts(cumulativeLetterCounts, cumulativeWordCounts);
+}
+
+function renderCumulativeCharts(letterCounts, wordCounts) {
+  const letterLabels = Object.keys(letterCounts).sort();
+  const letterValues = letterLabels.map(l => letterCounts[l]);
+
+  const sortedWords = Object.keys(wordCounts).sort((a,b) => wordCounts[b] - wordCounts[a]);
+  const wordLabels = sortedWords;
+  const wordValues = wordLabels.map(w => wordCounts[w]);
+
+  if (combinedLetterChart) combinedLetterChart.destroy();
+  if (combinedWordChart) combinedWordChart.destroy();
+
+  const letterCtx = document.getElementById('combinedLetterChart').getContext('2d');
+  combinedLetterChart = new Chart(letterCtx, {
+    type: 'bar',
+    data: {
+      labels: letterLabels,
+      datasets: [{
+        label: 'Cumulative Letter Frequency',
+        data: letterValues,
+        backgroundColor: 'rgba(54, 162, 235, 0.7)'
+      }]
+    },
+    options: { responsive: true, scales: { y: { beginAtZero: true } } }
+  });
+
+  const wordCtx = document.getElementById('combinedWordChart').getContext('2d');
+  combinedWordChart = new Chart(wordCtx, {
+    type: 'bar',
+    data: {
+      labels: wordLabels,
+      datasets: [{
+        label: 'Cumulative Word Frequency',
+        data: wordValues,
+        backgroundColor: 'rgba(75, 192, 192, 0.7)'
+      }]
+    },
+    options: { responsive: true, scales: { y: { beginAtZero: true } } }
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadHistory();
+});
+</script>
+</body>
+</html>
